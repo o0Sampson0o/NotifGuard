@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NotifGuard</string>
+    <string name="tab_rules">Rules</string>
+    <string name="tab_apps">Apps</string>
+    <string name="tab_saved">Saved</string>
+    <string name="tab_log">Activity</string>
+    <string name="permission_required">Notification Access Required</string>
+    <string name="permission_desc">NotifGuard needs notification access to filter and save your notifications.</string>
+    <string name="grant_permission">Grant Access</string>
+    <string name="service_active">Filter Active</string>
+    <string name="service_inactive">Filter Inactive</string>
+    <string name="days_left">%d days left</string>
+    <string name="expires_soon">Expires soon</string>
+    <string name="no_notifications">No saved notifications</string>
+    <string name="export_success">Exported successfully</string>
+    <string name="rule_added">Rule added</string>
+    <string name="rule_deleted">Rule deleted</string>
+    <string name="add_rule">Add Rule</string>
+    <string name="block">Block</string>
+    <string name="whitelist">Whitelist</string>
+    <string name="app_filter">App</string>
+    <string name="regex_filter">Regex</string>
+    <string name="search_apps">Search apps…</string>
+    <string name="search_rules">Search rules…</string>
+    <string name="search_notifications">Search notifications…</string>
+    <string name="note_optional">Note (optional)</string>
+    <string name="regex_pattern">Regex Pattern</string>
+    <string name="select_app">Select App</string>
+    <string name="cancel">Cancel</string>
+    <string name="confirm">Confirm</string>
+    <string name="delete">Delete</string>
+    <string name="export">Export</string>
+    <string name="all_allowed_by_default">All apps allowed by default. Toggle to block.</string>
+    <string name="how_it_works">Rules evaluated top to bottom. Block hides notifications. Whitelist overrides blocks.</string>
+    <string name="notif_channel_name">NotifGuard Service</string>
+    <string name="notif_channel_desc">Keeps the notification filter running</string>
+    <string name="service_running">Notification filter is running</string>
+    <string name="Theme">Theme.NotifGuard</string>
+</resources>

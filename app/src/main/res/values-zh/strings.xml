@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">通知守卫</string>
+    <string name="tab_rules">规则</string>
+    <string name="tab_apps">应用</string>
+    <string name="tab_saved">已保存</string>
+    <string name="tab_log">活动</string>
+    <string name="permission_required">需要通知访问权限</string>
+    <string name="permission_desc">通知守卫需要通知访问权限来过滤和保存您的通知。</string>
+    <string name="grant_permission">授予权限</string>
+    <string name="service_active">过滤已启用</string>
+    <string name="service_inactive">过滤已停用</string>
+    <string name="days_left">剩余 %d 天</string>
+    <string name="expires_soon">即将过期</string>
+    <string name="no_notifications">暂无保存的通知</string>
+    <string name="export_success">导出成功</string>
+    <string name="rule_added">规则已添加</string>
+    <string name="rule_deleted">规则已删除</string>
+    <string name="add_rule">添加规则</string>
+    <string name="block">屏蔽</string>
+    <string name="whitelist">白名单</string>
+    <string name="app_filter">应用</string>
+    <string name="regex_filter">正则</string>
+    <string name="search_apps">搜索应用…</string>
+    <string name="search_rules">搜索规则…</string>
+    <string name="search_notifications">搜索通知…</string>
+    <string name="note_optional">备注（可选）</string>
+    <string name="regex_pattern">正则表达式</string>
+    <string name="select_app">选择应用</string>
+    <string name="cancel">取消</string>
+    <string name="confirm">确认</string>
+    <string name="delete">删除</string>
+    <string name="export">导出</string>
+    <string name="all_allowed_by_default">所有应用默认允许，切换以屏蔽。</string>
+    <string name="how_it_works">规则从上到下依次评估。屏蔽规则隐藏通知，白名单规则覆盖屏蔽。</string>
+    <string name="notif_channel_name">通知守卫服务</string>
+    <string name="notif_channel_desc">保持通知过滤器运行</string>
+    <string name="service_running">通知过滤器正在运行</string>
+</resources>
