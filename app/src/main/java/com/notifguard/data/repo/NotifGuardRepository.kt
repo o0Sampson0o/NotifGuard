@@ -38,6 +38,8 @@ class NotifGuardRepository(context: Context) {
     }
 
     suspend fun deleteFilterRule(id: String) = filterRuleDao.deleteById(id)
+
+    suspend fun updateFilterRule(rule: FilterRule) = filterRuleDao.update(rule)
     suspend fun toggleFilterRule(rule: FilterRule) = filterRuleDao.update(rule.copy(enabled = !rule.enabled))
     suspend fun reorderFilterRules(rules: List<FilterRule>) = filterRuleDao.reorderRules(rules)
 
@@ -50,6 +52,8 @@ class NotifGuardRepository(context: Context) {
     }
 
     suspend fun deleteSaveRule(id: String) = saveRuleDao.deleteById(id)
+
+    suspend fun updateSaveRule(rule: SaveRule) = saveRuleDao.update(rule)
     suspend fun toggleSaveRule(rule: SaveRule) = saveRuleDao.update(rule.copy(enabled = !rule.enabled))
     suspend fun reorderSaveRules(rules: List<SaveRule>) = saveRuleDao.reorderRules(rules)
 

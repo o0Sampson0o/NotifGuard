@@ -120,6 +120,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteFilterRule(id: String) = viewModelScope.launch { repo.deleteFilterRule(id) }
+    fun updateFilterRule(rule: FilterRule) = viewModelScope.launch { repo.updateFilterRule(rule) }
     fun toggleFilterRule(rule: FilterRule) = viewModelScope.launch { repo.toggleFilterRule(rule) }
 
     fun moveFilterRule(rules: List<FilterRule>, fromIndex: Int, direction: Int) {
@@ -147,6 +148,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteSaveRule(id: String) = viewModelScope.launch { repo.deleteSaveRule(id) }
+    fun updateSaveRule(rule: SaveRule) = viewModelScope.launch { repo.updateSaveRule(rule) }
     fun toggleSaveRule(rule: SaveRule) = viewModelScope.launch { repo.toggleSaveRule(rule) }
 
     fun moveSaveRule(rules: List<SaveRule>, fromIndex: Int, direction: Int) {
