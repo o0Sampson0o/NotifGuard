@@ -3,6 +3,9 @@ package com.notifguard.service
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.media.AudioAttributes
+import android.media.RingtoneManager
+import android.net.Uri
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationCompat
@@ -19,16 +22,20 @@ class NotifListenerService : NotificationListenerService() {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.IO + job)
     private lateinit var repo: NotifGuardRepository
+    private lateinit var nm: NotificationManager
 
-    // In-memory set of notification keys we have already seen this session.
-    // When onNotificationPosted fires, if the key is already here it's an edit.
-    // Cleared entry on onNotificationRemoved.
+    // In-memory set of seen notification keys for edit detection
     private val seenKeys = mutableSetOf<String>()
+
+    // Silent repost channel — no sound, no vibration
+    private val silentChannelId = "notifguard_silent_repost"
 
     override fun onCreate() {
         super.onCreate()
         repo = NotifGuardRepository.getInstance(this)
+        nm = getSystemService(NotificationManager::class.java)
         createForegroundChannel()
+        createSilentChannel()
         startForeground(FOREGROUND_ID, buildForegroundNotification())
     }
 
@@ -38,17 +45,26 @@ class NotifListenerService : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        if (sbn.packageName == packageName) return
+        val extras = sbn.notification.extras
+        val targetPkg = extras.getString("notifguard_target_pkg")
+
+        // Ignore our own non-test notifications (foreground service etc.)
+        if (sbn.packageName == packageName && targetPkg == null) return
 
         val notifKey = "${sbn.packageName}|${sbn.id}|${sbn.tag ?: ""}"
         val isUpdate = notifKey in seenKeys
         seenKeys.add(notifKey)
 
-        val extras  = sbn.notification.extras
         val title   = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
         val body    = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
-        val pkg     = sbn.packageName
+        val pkg     = targetPkg ?: sbn.packageName
         val appName = resolveAppName(pkg)
+
+        val resolvedIntentUri: String? = runCatching {
+            packageManager.getLaunchIntentForPackage(pkg)
+                ?.apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }
+                ?.toUri(android.content.Intent.URI_INTENT_SCHEME)
+        }.getOrNull()
 
         scope.launch {
             val filterResult = repo.evaluate(pkg, title, body)
@@ -56,19 +72,29 @@ class NotifListenerService : NotificationListenerService() {
 
             when (filterResult.action) {
                 RuleAction.BLOCK -> {
-                    // Block: cancel the notification, don't save, just log
                     cancelNotification(sbn.key)
                     repo.addLog(pkg, appName, notifKey, title, body, isUpdate, filterResult, saveResult)
                 }
                 RuleAction.WHITELIST, null -> {
-                    // Passed filter — now check save rules
+                    val customSound = filterResult.customSoundUri
+
+                    if (customSound != null) {
+                        // Has custom sound: cancel original (removes its system sound),
+                        // repost silently so the notification still appears visually,
+                        // then play our custom sound on the notification audio stream.
+                        cancelNotification(sbn.key)
+                        repostSilently(sbn, title, body)
+                        playNotificationSound(customSound)
+                    }
+                    // If no custom sound: leave notification untouched — system plays its own sound normally
+
                     val shouldSave = when (saveResult.action) {
                         SaveRuleAction.SKIP -> false
                         SaveRuleAction.SAVE -> true
-                        null               -> true  // default: save
+                        null               -> true
                     }
                     if (shouldSave) {
-                        repo.saveOrUpdateNotification(pkg, appName, notifKey, title, body)
+                        repo.saveOrUpdateNotification(pkg, appName, notifKey, title, body, resolvedIntentUri)
                     }
                     repo.addLog(pkg, appName, notifKey, title, body, isUpdate, filterResult, saveResult)
                 }
@@ -80,6 +106,47 @@ class NotifListenerService : NotificationListenerService() {
         val notifKey = "${sbn.packageName}|${sbn.id}|${sbn.tag ?: ""}"
         seenKeys.remove(notifKey)
     }
+
+    // ─── Silent repost ────────────────────────────────────────────────────
+
+    /**
+     * Reposts the notification visually (so it still appears in the shade)
+     * but with no sound or vibration. Called when we want to play a custom
+     * sound instead of the notification's original sound.
+     */
+    private fun repostSilently(sbn: StatusBarNotification, title: String, body: String) {
+        runCatching {
+            val pendingIntent = sbn.notification.contentIntent
+            val builder = NotificationCompat.Builder(this, silentChannelId)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .setSilent(true)
+            nm.notify(sbn.id, builder.build())
+        }
+    }
+
+    // ─── Custom sound playback ────────────────────────────────────────────
+
+    /**
+     * Plays a sound on the NOTIFICATION audio stream at notification volume.
+     * This is the correct stream for notification sounds — not STREAM_RING or STREAM_MUSIC.
+     */
+    private fun playNotificationSound(uriString: String) {
+        runCatching {
+            val uri = Uri.parse(uriString)
+            val ringtone = RingtoneManager.getRingtone(this, uri)
+            ringtone?.audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            ringtone?.play()
+        }
+    }
+
+    // ─── Helpers ──────────────────────────────────────────────────────────
 
     private fun resolveAppName(packageName: String): String = runCatching {
         packageManager.getApplicationLabel(
@@ -96,7 +163,20 @@ class NotifListenerService : NotificationListenerService() {
             description = getString(com.notifguard.R.string.notif_channel_desc)
             setShowBadge(false)
         }
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        nm.createNotificationChannel(channel)
+    }
+
+    private fun createSilentChannel() {
+        val channel = NotificationChannel(
+            silentChannelId,
+            "NotifGuard Silent Repost",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            setSound(null, null)         // no sound on the channel level
+            enableVibration(false)
+            setShowBadge(true)
+        }
+        nm.createNotificationChannel(channel)
     }
 
     private fun buildForegroundNotification() =
@@ -109,7 +189,7 @@ class NotifListenerService : NotificationListenerService() {
             .build()
 
     companion object {
-        const val CHANNEL_ID   = "notifguard_service"
+        const val CHANNEL_ID    = "notifguard_service"
         const val FOREGROUND_ID = 1
     }
 }

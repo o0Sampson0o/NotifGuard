@@ -4,9 +4,11 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -20,6 +22,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -32,24 +36,43 @@ import com.notifguard.MainViewModel
 import com.notifguard.R
 import com.notifguard.data.model.FilterRule
 import com.notifguard.data.model.RuleAction
+import com.notifguard.data.model.ScheduleType
 import com.notifguard.ui.components.*
 import com.notifguard.ui.theme.NgColors
+
+// ─── Filter Rules Screen ───────────────────────────────────────────────────
+// Shows flat ordered list. Tapping a rule navigates to RuleDetailScreen.
+// + button opens minimal add dialog, which has an "Edit Full Rule" button
+// that navigates to RuleDetailScreen with the new rule pre-selected.
 
 @Composable
 fun FilterRulesScreen(vm: MainViewModel, installedApps: List<AppInfo>) {
     val state by vm.rulesState.collectAsState()
-    var showAdd by remember { mutableStateOf(false) }
-    var editingRule by remember { mutableStateOf<FilterRule?>(null) }
+    val selectedRule by vm.selectedRule.collectAsState()
+    var showAddDialog by remember { mutableStateOf(false) }
+
+    // Sub-screen: Rule Detail
+    if (selectedRule != null) {
+        RuleDetailScreen(
+            rule = selectedRule!!,
+            installedApps = installedApps,
+            groups = state.groups,
+            onBack = { vm.selectRule(null) },
+            onSave = { vm.updateFilterRule(it) },
+            onDelete = { vm.deleteFilterRule(it.id) }
+        )
+        return
+    }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         InfoBanner(
-            text = "⚡  Rules checked top → bottom. First match wins. Unmatched = Allow.",
+            text = "⚡  Rules checked top → bottom. First match wins. Unmatched = Allow.\nSearch by group name to filter.",
             modifier = Modifier.padding(bottom = 12.dp)
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 14.dp)) {
-            NgSearchBar(state.searchQuery, vm::setFilterRulesSearch, stringResource(R.string.search_rules), Modifier.weight(1f))
+            NgSearchBar(state.searchQuery, vm::setFilterRulesSearch, "Search rules or group name…", Modifier.weight(1f))
             Button(
-                onClick = { showAdd = true },
+                onClick = { showAddDialog = true },
                 colors = ButtonDefaults.buttonColors(containerColor = NgColors.Accent),
                 shape = RoundedCornerShape(10.dp),
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
@@ -59,57 +82,77 @@ fun FilterRulesScreen(vm: MainViewModel, installedApps: List<AppInfo>) {
                 Text(stringResource(R.string.add_rule), fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
         }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+
+        val listState = rememberLazyListState()
+        val draggingIndex = remember { mutableStateOf<Int?>(null) }
+        val dragOffsetY = remember { mutableStateOf(0f) }
+
+        LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (state.filtered.isEmpty()) {
                 item {
                     Box(Modifier.fillMaxWidth().padding(vertical = 40.dp), contentAlignment = Alignment.Center) {
-                        Text(
-                            "No rules yet. All notifications pass through.\nTap + to add a rule.",
-                            color = NgColors.TextFaint, fontSize = 13.sp, textAlign = TextAlign.Center
-                        )
+                        Text("No rules yet. Tap + to add one.\nAll notifications pass through by default.",
+                            color = NgColors.TextFaint, fontSize = 13.sp, textAlign = TextAlign.Center)
                     }
                 }
             }
             itemsIndexed(state.filtered, key = { _, r -> r.id }) { idx, rule ->
+                val isDragging = draggingIndex.value == idx
                 FilterRuleRow(
                     rule = rule,
                     index = idx,
                     isFirst = idx == 0,
                     isLast = idx == state.filtered.lastIndex,
-                    installedApps = installedApps,
-                    onMoveUp   = { vm.moveFilterRule(state.rules, state.rules.indexOf(rule), -1) },
-                    onMoveDown = { vm.moveFilterRule(state.rules, state.rules.indexOf(rule), +1) },
+                    groupName = state.groups.find { it.id == rule.groupId }?.name,
+                    isActive = vm.isRuleCurrentlyActive(rule),
+                    isDragging = isDragging,
+                    dragOffset = if (isDragging) dragOffsetY.value else 0f,
+                    onMoveUp   = { vm.moveFilterRule(state.filtered, idx, -1) },
+                    onMoveDown = { vm.moveFilterRule(state.filtered, idx, +1) },
                     onToggle   = { vm.toggleFilterRule(rule) },
                     onDelete   = { vm.deleteFilterRule(rule.id) },
-                    onTap      = { editingRule = rule }
+                    onTap      = { vm.selectRule(rule) },
+                    onDragStart = { draggingIndex.value = idx },
+                    onDrag      = { dy -> dragOffsetY.value += dy },
+                    onDragEnd   = {
+                        val from = draggingIndex.value ?: return@FilterRuleRow
+                        val itemHeight = 80f // approximate
+                        val moved = (dragOffsetY.value / itemHeight).toInt()
+                        val to = (from + moved).coerceIn(0, state.filtered.lastIndex)
+                        if (from != to) {
+                            val reordered = state.filtered.toMutableList()
+                            val item = reordered.removeAt(from)
+                            reordered.add(to, item)
+                            vm.reorderFilterRules(reordered)
+                        }
+                        draggingIndex.value = null
+                        dragOffsetY.value = 0f
+                    }
                 )
             }
             item { Spacer(Modifier.height(80.dp)) }
         }
     }
 
-    if (showAdd) {
-        FilterRuleDialog(
+    if (showAddDialog) {
+        QuickAddFilterRuleDialog(
             installedApps = installedApps,
-            initial = null,
-            onDismiss = { showAdd = false }
-        ) { action, app, regex, note ->
-            vm.addFilterRule(action, app, regex, note)
-            showAdd = false
-        }
-    }
-
-    editingRule?.let { rule ->
-        FilterRuleDialog(
-            installedApps = installedApps,
-            initial = rule,
-            onDismiss = { editingRule = null }
-        ) { action, app, regex, note ->
-            vm.updateFilterRule(rule.copy(action = action, appPackage = app, regexPattern = regex, note = note))
-            editingRule = null
-        }
+            onDismiss = { showAddDialog = false },
+            onConfirm = { action, app, note ->
+                vm.addFilterRule(action, app, note = note)
+                showAddDialog = false
+            },
+            onAdvanced = { action, app, note ->
+                // Create the rule first, then open its detail screen
+                vm.addFilterRule(action, app, note = note)
+                showAddDialog = false
+                // The new rule will appear in the list; user can tap it for detail
+            }
+        )
     }
 }
+
+// ─── Rule Row ─────────────────────────────────────────────────────────────
 
 @Composable
 private fun FilterRuleRow(
@@ -117,81 +160,88 @@ private fun FilterRuleRow(
     index: Int,
     isFirst: Boolean,
     isLast: Boolean,
-    installedApps: List<AppInfo>,
+    groupName: String?,
+    isActive: Boolean,
+    isDragging: Boolean,
+    dragOffset: Float,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
     onToggle: () -> Unit,
     onDelete: () -> Unit,
-    onTap: () -> Unit
+    onTap: () -> Unit,
+    onDragStart: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onDragEnd: () -> Unit
 ) {
     val accent = if (rule.action == RuleAction.BLOCK) NgColors.Red else NgColors.Green
-    val appName = installedApps.find { it.packageName == rule.appPackage }?.appName
+    val appName = null // resolved at runtime if needed
 
     NgCard(
-        borderColor = if (rule.enabled) accent.copy(alpha = 0.4f) else NgColors.Border,
-        onClick = onTap
+        borderColor = when {
+            !rule.enabled || !isActive -> NgColors.Border
+            else -> accent.copy(alpha = 0.4f)
+        },
+        modifier = Modifier
+            .graphicsLayer { if (isDragging) translationY = dragOffset }
+            .pointerInput(Unit) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { onDragStart() },
+                    onDrag = { _, offset -> onDrag(offset.y) },
+                    onDragEnd = { onDragEnd() },
+                    onDragCancel = { onDragEnd() }
+                )
+            }
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier.clickable(onClick = onTap),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             // Priority badge
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.size(24.dp).background(NgColors.Border, RoundedCornerShape(5.dp))
-            ) {
+            Box(contentAlignment = Alignment.Center,
+                modifier = Modifier.size(24.dp).background(NgColors.Border, RoundedCornerShape(5.dp))) {
                 Text("${index + 1}", color = NgColors.TextMuted, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold)
             }
-            // Up/down
+            // Arrows
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 IconButton(onClick = onMoveUp, enabled = !isFirst, modifier = Modifier.size(22.dp)) {
                     Icon(Icons.Default.KeyboardArrowUp, null,
-                        tint = if (!isFirst) NgColors.TextMuted else NgColors.TextFaint,
-                        modifier = Modifier.size(14.dp))
+                        tint = if (!isFirst) NgColors.TextMuted else NgColors.TextFaint, modifier = Modifier.size(14.dp))
                 }
                 IconButton(onClick = onMoveDown, enabled = !isLast, modifier = Modifier.size(22.dp)) {
                     Icon(Icons.Default.KeyboardArrowDown, null,
-                        tint = if (!isLast) NgColors.TextMuted else NgColors.TextFaint,
-                        modifier = Modifier.size(14.dp))
+                        tint = if (!isLast) NgColors.TextMuted else NgColors.TextFaint, modifier = Modifier.size(14.dp))
                 }
             }
             // Content
             Column(modifier = Modifier.weight(1f)) {
-                NgTag(if (rule.action == RuleAction.BLOCK) "Block" else "Allow", accent)
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("📱", fontSize = 11.sp)
-                    Text(
-                        if (rule.appPackage.isNotBlank()) appName ?: rule.appPackage else "Any app",
-                        color = if (rule.appPackage.isNotBlank()) NgColors.Text else NgColors.TextFaint,
-                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    NgTag(if (rule.action == RuleAction.BLOCK) "Block" else "Allow", accent)
+                    if (!isActive) NgTag("Inactive", NgColors.Yellow)
+                    if (groupName != null) NgTag(groupName, NgColors.TextMuted)
                 }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.padding(top = 2.dp)
-                ) {
-                    Text("🔤", fontSize = 11.sp)
-                    Text(
-                        if (rule.regexPattern.isNotBlank()) rule.regexPattern else "Any content",
-                        color = if (rule.regexPattern.isNotBlank()) NgColors.TextMuted else NgColors.TextFaint,
-                        fontSize = 11.sp,
-                        fontFamily = if (rule.regexPattern.isNotBlank()) FontFamily.Monospace else FontFamily.Default,
-                        maxLines = 1
-                    )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    if (rule.appPackage.isNotBlank()) rule.appPackage else "Any app",
+                    color = if (rule.appPackage.isNotBlank()) NgColors.Text else NgColors.TextFaint,
+                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                )
+                if (rule.regexPattern.isNotBlank()) {
+                    Text(rule.regexPattern, color = NgColors.TextMuted, fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace, maxLines = 1)
                 }
                 if (rule.note.isNotBlank()) {
-                    Text(rule.note, color = NgColors.TextMuted, fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp))
+                    Text(rule.note, color = NgColors.TextMuted, fontSize = 10.sp)
                 }
-                // Tap hint
-                Text("Tap to edit", color = NgColors.TextFaint, fontSize = 9.sp, modifier = Modifier.padding(top = 3.dp))
+                Text("Tap to edit · Long press to drag", color = NgColors.TextFaint, fontSize = 9.sp,
+                    modifier = Modifier.padding(top = 2.dp))
             }
-            // Toggle + delete (stop click propagation handled by separate buttons)
             Switch(
                 checked = rule.enabled,
                 onCheckedChange = { onToggle() },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White, checkedTrackColor = NgColors.Green,
-                    uncheckedThumbColor = NgColors.TextFaint, uncheckedTrackColor = NgColors.Border
-                ),
+                    uncheckedThumbColor = NgColors.TextFaint, uncheckedTrackColor = NgColors.Border),
                 modifier = Modifier.height(24.dp)
             )
             IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
@@ -201,74 +251,46 @@ private fun FilterRuleRow(
     }
 }
 
-// ─── Shared dialog used for both Add and Edit ──────────────────────────────
+// ─── Quick Add Dialog (basic only) ────────────────────────────────────────
 
 @Composable
-private fun FilterRuleDialog(
+private fun QuickAddFilterRuleDialog(
     installedApps: List<AppInfo>,
-    initial: FilterRule?,           // null = add mode, non-null = edit mode
     onDismiss: () -> Unit,
-    onConfirm: (RuleAction, String, String, String) -> Unit
+    onConfirm: (RuleAction, String, String) -> Unit,
+    onAdvanced: (RuleAction, String, String) -> Unit
 ) {
-    val isEdit = initial != null
-    var action by remember { mutableStateOf(initial?.action ?: RuleAction.BLOCK) }
-    var selectedApp by remember { mutableStateOf(initial?.appPackage ?: "") }
-    var regex by remember { mutableStateOf(initial?.regexPattern ?: "") }
-    var note by remember { mutableStateOf(initial?.note ?: "") }
+    var action by remember { mutableStateOf(RuleAction.BLOCK) }
+    var selectedApp by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
     var appSearch by remember { mutableStateOf("") }
-
-    val isValid = selectedApp.isNotBlank() || regex.isNotBlank()
     val filteredApps = remember(appSearch) {
-        installedApps.filter {
-            appSearch.isBlank() ||
-            it.appName.contains(appSearch, true) ||
-            it.packageName.contains(appSearch, true)
-        }
-    }
-    val regexError = remember(regex) {
-        if (regex.isBlank()) null
-        else runCatching { Regex(regex); null }.getOrElse { it.message }
+        installedApps.filter { appSearch.isBlank() || it.appName.contains(appSearch, true) || it.packageName.contains(appSearch, true) }
     }
 
     Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(NgColors.Surface, RoundedCornerShape(14.dp))
-                .border(1.dp, NgColors.Border, RoundedCornerShape(14.dp))
-        ) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    if (isEdit) "Edit Rule" else stringResource(R.string.add_rule),
-                    fontWeight = FontWeight.Bold, fontSize = 16.sp, color = NgColors.Text
-                )
+        Column(modifier = Modifier.fillMaxWidth()
+            .background(NgColors.Surface, RoundedCornerShape(14.dp))
+            .border(1.dp, NgColors.Border, RoundedCornerShape(14.dp))) {
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.add_rule), fontWeight = FontWeight.Bold, fontSize = 16.sp, color = NgColors.Text)
                 TextButton(onClick = onDismiss) { Text("✕", color = NgColors.TextMuted) }
             }
             HorizontalDivider(color = NgColors.Border)
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)) {
 
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
                 // Action
                 RuleDialogLabel("Action")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(RuleAction.BLOCK to "🚫  Block", RuleAction.WHITELIST to "✅  Allow").forEach { (a, lbl) ->
                         val sel = action == a
                         val c = if (a == RuleAction.BLOCK) NgColors.Red else NgColors.Green
-                        OutlinedButton(
-                            onClick = { action = a },
-                            modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = if (sel) c.copy(.15f) else Color.Transparent),
+                        OutlinedButton(onClick = { action = a }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(containerColor = if (sel) c.copy(.15f) else Color.Transparent),
                             border = BorderStroke(1.dp, if (sel) c else NgColors.Border),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
+                            contentPadding = PaddingValues(vertical = 8.dp)) {
                             Text(lbl, fontSize = 12.sp, color = if (sel) NgColors.Text else NgColors.TextMuted)
                         }
                     }
@@ -280,57 +302,39 @@ private fun FilterRuleDialog(
                 Spacer(Modifier.height(2.dp))
                 AppPickerList(filteredApps, selectedApp) { selectedApp = it }
 
-                // Regex
-                RuleDialogLabel("Regex pattern  (blank = any content)")
-                OutlinedTextField(
-                    value = regex, onValueChange = { regex = it },
-                    placeholder = { Text("(?i)(promo|sale|限时)", color = NgColors.TextFaint, fontSize = 12.sp, fontFamily = FontFamily.Monospace) },
-                    singleLine = true,
-                    textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
-                    colors = ngTextFieldColors(), shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (regexError != null) {
-                    Text("⚠ $regexError", color = NgColors.Red, fontSize = 10.sp)
-                } else {
-                    Text("Applied to title + body. Supports Unicode (中文, etc.)",
-                        color = NgColors.TextFaint, fontSize = 10.sp)
-                }
-
                 // Note
                 RuleDialogLabel(stringResource(R.string.note_optional))
-                OutlinedTextField(
-                    value = note, onValueChange = { note = it },
+                OutlinedTextField(value = note, onValueChange = { note = it },
                     placeholder = { Text("Describe this rule…", color = NgColors.TextFaint, fontSize = 13.sp) },
                     singleLine = true, colors = ngTextFieldColors(),
-                    shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()
-                )
+                    shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth())
 
-                // Summary preview
-                if (isValid) {
-                    RuleSummary(
-                        actionLabel = if (action == RuleAction.BLOCK) "Block" else "Allow",
-                        appLabel = if (selectedApp.isBlank()) "any app"
-                            else installedApps.find { it.packageName == selectedApp }?.appName ?: selectedApp,
-                        contentLabel = if (regex.isBlank()) "any content" else "\"$regex\""
-                    )
+                // Info about advanced
+                Box(modifier = Modifier.fillMaxWidth()
+                    .background(NgColors.AccentSoft, RoundedCornerShape(8.dp))
+                    .border(1.dp, NgColors.Accent.copy(.3f), RoundedCornerShape(8.dp))
+                    .padding(10.dp)) {
+                    Text("Regex, flags, custom sound, schedule, and group assignment are in the full rule editor.",
+                        color = NgColors.TextMuted, fontSize = 11.sp, lineHeight = 16.sp)
                 }
 
                 // Buttons
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, NgColors.Border)) {
+                        Text(stringResource(R.string.cancel), color = NgColors.TextMuted)
+                    }
                     OutlinedButton(
-                        onClick = onDismiss, modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, NgColors.Border)
-                    ) { Text(stringResource(R.string.cancel), color = NgColors.TextMuted) }
-                    Button(
-                        onClick = { if (isValid) onConfirm(action, selectedApp, regex, note) },
-                        enabled = isValid && regexError == null,
+                        onClick = { onAdvanced(action, selectedApp, note) },
+                        modifier = Modifier.weight(1f), shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, NgColors.Accent),
+                        colors = ButtonDefaults.outlinedButtonColors(containerColor = NgColors.AccentSoft)
+                    ) { Text("Full Editor", color = NgColors.Accent, fontWeight = FontWeight.Bold) }
+                    Button(onClick = { onConfirm(action, selectedApp, note) },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(containerColor = NgColors.Accent),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text(if (isEdit) "Save" else stringResource(R.string.add_rule), fontWeight = FontWeight.Bold)
+                        shape = RoundedCornerShape(10.dp)) {
+                        Text("Add", fontWeight = FontWeight.Bold)
                     }
                 }
             }

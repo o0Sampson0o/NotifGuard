@@ -15,8 +15,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.notifguard.R
 import com.notifguard.MainViewModel
+import com.notifguard.R
 import com.notifguard.ui.components.InfoBanner
 import com.notifguard.ui.components.NgSearchBar
 import com.notifguard.ui.theme.NgColors
@@ -28,28 +28,28 @@ fun AppsScreen(vm: MainViewModel) {
     val state by vm.appsState.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-
         InfoBanner(
             text = "Browse installed apps. To block or allow an app, add a rule in the Rules tab.",
-            modifier = Modifier.padding(bottom = 12.dp)
+            modifier = Modifier.padding(bottom = 12.dp),
         )
 
         NgSearchBar(
             value = state.searchQuery,
             onValueChange = vm::setAppsSearch,
             placeholder = stringResource(R.string.search_apps),
-            modifier = Modifier.padding(bottom = 14.dp)
+            modifier = Modifier.padding(bottom = 14.dp),
         )
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             items(state.filtered, key = { it.packageName }) { app ->
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(NgColors.SurfaceHigh, RoundedCornerShape(10.dp))
-                        .border(1.dp, NgColors.Border, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .background(NgColors.SurfaceHigh, RoundedCornerShape(10.dp))
+                            .border(1.dp, NgColors.Border, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(app.appName, color = NgColors.Text, fontWeight = FontWeight.Bold, fontSize = 14.sp)

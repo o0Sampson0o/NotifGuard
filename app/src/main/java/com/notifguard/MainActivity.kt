@@ -16,22 +16,34 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.notifguard.service.NotifListenerService
 import com.notifguard.ui.screens.*
 import com.notifguard.ui.theme.NgColors
 import com.notifguard.ui.theme.NotifGuardTheme
 
 class MainActivity : ComponentActivity() {
-
     private val vm: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, false)
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
             NotifGuardTheme {
+                // Re-check permission every time the activity resumes (e.g. after settings)
+                val lifecycleOwner = LocalLifecycleOwner.current
                 var hasPermission by remember { mutableStateOf(isListenerEnabled()) }
+                DisposableEffect(lifecycleOwner) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_RESUME) {
+                            hasPermission = isListenerEnabled()
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                }
                 if (!hasPermission) PermissionScreen()
                 else MainScaffold(vm)
             }
@@ -40,23 +52,25 @@ class MainActivity : ComponentActivity() {
 
     fun isListenerEnabled(): Boolean {
         val cn = ComponentName(this, NotifListenerService::class.java)
-        val flat = android.provider.Settings.Secure.getString(contentResolver, "enabled_notification_listeners") ?: return false
+        val flat = android.provider.Settings.Secure.getString(
+            contentResolver, "enabled_notification_listeners") ?: return false
         return flat.contains(cn.flattenToString())
     }
 }
 
 sealed class Screen(val route: String, val label: String, val icon: String) {
-    object FilterRules : Screen("filter_rules", "Filter",  "⚡")
-    object SaveRules   : Screen("save_rules",   "Saving",  "💾")
-    object Apps        : Screen("apps",          "Apps",    "📱")
-    object Saved       : Screen("saved",         "Saved",   "📦")
-    object Activity    : Screen("activity",      "Activity","📋")
+    object Filter   : Screen("filter",   "Filter",   "⚡")
+    object Groups   : Screen("groups",   "Groups",   "🗂")
+    object Saving   : Screen("saving",   "Saving",   "💾")
+    object Apps     : Screen("apps",     "Apps",     "📱")
+    object Saved    : Screen("saved",    "Saved",    "📦")
+    object Activity : Screen("activity", "Activity", "📋")
 }
 
 @Composable
 fun MainScaffold(vm: MainViewModel) {
-    val tabs = listOf(Screen.FilterRules, Screen.SaveRules, Screen.Apps, Screen.Saved, Screen.Activity)
-    var selected by remember { mutableStateOf<Screen>(Screen.FilterRules) }
+    val tabs = listOf(Screen.Filter, Screen.Groups, Screen.Saving, Screen.Apps, Screen.Saved, Screen.Activity)
+    var selected by remember { mutableStateOf<Screen>(Screen.Filter) }
     val appsState by vm.appsState.collectAsState()
 
     Scaffold(
@@ -66,11 +80,12 @@ fun MainScaffold(vm: MainViewModel) {
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding).background(NgColors.Bg)) {
             when (selected) {
-                Screen.FilterRules -> FilterRulesScreen(vm, appsState.installedApps)
-                Screen.SaveRules   -> SaveRulesScreen(vm, appsState.installedApps)
-                Screen.Apps        -> AppsScreen(vm)
-                Screen.Saved       -> SavedScreen(vm)
-                Screen.Activity    -> ActivityScreen(vm)
+                Screen.Filter   -> FilterRulesScreen(vm, appsState.installedApps)
+                Screen.Groups   -> GroupsScreen(vm, appsState.installedApps)
+                Screen.Saving   -> SaveRulesScreen(vm, appsState.installedApps)
+                Screen.Apps     -> AppsScreen(vm)
+                Screen.Saved    -> SavedScreen(vm, appsState.installedApps)
+                Screen.Activity -> ActivityScreen(vm)
             }
         }
     }
@@ -82,13 +97,12 @@ fun TopBar() {
     TopAppBar(
         title = {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(
-                    contentAlignment = Alignment.Center,
+                Box(contentAlignment = Alignment.Center,
                     modifier = Modifier.size(32.dp).background(
                         brush = androidx.compose.ui.graphics.Brush.linearGradient(listOf(NgColors.Accent, Color(0xFF7B5FFF))),
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
-                    )
-                ) { Text("🛡", fontSize = 16.sp) }
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp))) {
+                    Text("🛡", fontSize = 16.sp)
+                }
                 Column {
                     Text("NotifGuard", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = NgColors.Text)
                     Text("Notification Filter", fontSize = 9.sp, color = NgColors.TextFaint, letterSpacing = 0.5.sp)
@@ -110,17 +124,16 @@ fun TopBar() {
 fun BottomBar(tabs: List<Screen>, selected: Screen, onSelect: (Screen) -> Unit) {
     NavigationBar(containerColor = NgColors.Surface) {
         tabs.forEach { tab ->
-            val isSelected = selected == tab
+            val isSel = selected == tab
             NavigationBarItem(
-                selected = isSelected,
+                selected = isSel,
                 onClick = { onSelect(tab) },
-                icon = { Text(tab.icon, fontSize = 16.sp) },
-                label = { Text(tab.label, fontSize = 9.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                icon = { Text(tab.icon, fontSize = 15.sp) },
+                label = { Text(tab.label, fontSize = 9.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = NgColors.Accent, selectedTextColor = NgColors.Accent,
                     unselectedIconColor = NgColors.TextMuted, unselectedTextColor = NgColors.TextMuted,
-                    indicatorColor = NgColors.AccentSoft
-                )
+                    indicatorColor = NgColors.AccentSoft)
             )
         }
     }

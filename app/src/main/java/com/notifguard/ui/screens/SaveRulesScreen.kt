@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -20,6 +21,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -32,6 +35,7 @@ import com.notifguard.MainViewModel
 import com.notifguard.R
 import com.notifguard.data.model.SaveRule
 import com.notifguard.data.model.SaveRuleAction
+import com.notifguard.data.model.ScheduleType
 import com.notifguard.ui.components.*
 import com.notifguard.ui.theme.NgColors
 
@@ -40,20 +44,20 @@ fun SaveRulesScreen(vm: MainViewModel, installedApps: List<AppInfo>) {
     val state by vm.saveRulesState.collectAsState()
     var showAdd by remember { mutableStateOf(false) }
     var editingRule by remember { mutableStateOf<SaveRule?>(null) }
+    val draggingIndex = remember { mutableStateOf<Int?>(null) }
+    val dragOffsetY = remember { mutableStateOf(0f) }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         InfoBanner(
-            text = "💾  Controls what gets saved. Default = save everything. First match wins.\nSKIP = don't save.  SAVE = force save (overrides a SKIP above).",
+            text = "💾  Controls what gets saved. Default = save everything. First match wins.\nSKIP = don't save.  SAVE = force save.",
             modifier = Modifier.padding(bottom = 12.dp)
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 14.dp)) {
             NgSearchBar(state.searchQuery, vm::setSaveRulesSearch, stringResource(R.string.search_rules), Modifier.weight(1f))
-            Button(
-                onClick = { showAdd = true },
+            Button(onClick = { showAdd = true },
                 colors = ButtonDefaults.buttonColors(containerColor = NgColors.Accent),
                 shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
-            ) {
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)) {
                 Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
                 Text(stringResource(R.string.add_rule), fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -63,25 +67,35 @@ fun SaveRulesScreen(vm: MainViewModel, installedApps: List<AppInfo>) {
             if (state.filtered.isEmpty()) {
                 item {
                     Box(Modifier.fillMaxWidth().padding(vertical = 40.dp), contentAlignment = Alignment.Center) {
-                        Text(
-                            "No rules yet. All allowed notifications are saved by default.\nTap + to add a rule.",
-                            color = NgColors.TextFaint, fontSize = 13.sp, textAlign = TextAlign.Center
-                        )
+                        Text("No rules yet. All allowed notifications are saved by default.\nTap + to add a rule.",
+                            color = NgColors.TextFaint, fontSize = 13.sp, textAlign = TextAlign.Center)
                     }
                 }
             }
             itemsIndexed(state.filtered, key = { _, r -> r.id }) { idx, rule ->
+                val isDragging = draggingIndex.value == idx
                 SaveRuleRow(
-                    rule = rule,
-                    index = idx,
-                    isFirst = idx == 0,
-                    isLast = idx == state.filtered.lastIndex,
-                    installedApps = installedApps,
-                    onMoveUp   = { vm.moveSaveRule(state.rules, state.rules.indexOf(rule), -1) },
-                    onMoveDown = { vm.moveSaveRule(state.rules, state.rules.indexOf(rule), +1) },
+                    rule = rule, index = idx, isFirst = idx == 0, isLast = idx == state.filtered.lastIndex,
+                    installedApps = installedApps, isDragging = isDragging,
+                    dragOffset = if (isDragging) dragOffsetY.value else 0f,
+                    onMoveUp   = { vm.moveSaveRule(state.rules, idx, -1) },
+                    onMoveDown = { vm.moveSaveRule(state.rules, idx, +1) },
                     onToggle   = { vm.toggleSaveRule(rule) },
                     onDelete   = { vm.deleteSaveRule(rule.id) },
-                    onTap      = { editingRule = rule }
+                    onTap      = { editingRule = rule },
+                    onDragStart = { draggingIndex.value = idx },
+                    onDrag      = { dy -> dragOffsetY.value += dy },
+                    onDragEnd   = {
+                        val from = draggingIndex.value ?: return@SaveRuleRow
+                        val moved = (dragOffsetY.value / 80f).toInt()
+                        val to = (from + moved).coerceIn(0, state.filtered.lastIndex)
+                        if (from != to) {
+                            val reordered = state.filtered.toMutableList()
+                            val item = reordered.removeAt(from); reordered.add(to, item)
+                            vm.reorderSaveRules(reordered)
+                        }
+                        draggingIndex.value = null; dragOffsetY.value = 0f
+                    }
                 )
             }
             item { Spacer(Modifier.height(80.dp)) }
@@ -89,23 +103,18 @@ fun SaveRulesScreen(vm: MainViewModel, installedApps: List<AppInfo>) {
     }
 
     if (showAdd) {
-        SaveRuleDialog(
-            installedApps = installedApps,
-            initial = null,
-            onDismiss = { showAdd = false }
-        ) { action, app, regex, note ->
-            vm.addSaveRule(action, app, regex, note)
+        SaveRuleDialog(installedApps, null, { showAdd = false }) { action, app, regex, flags, note, schedule, start, end, mins ->
+            vm.addSaveRule(action, app, regex, flags, note, schedule, start, end, mins)
             showAdd = false
         }
     }
-
     editingRule?.let { rule ->
-        SaveRuleDialog(
-            installedApps = installedApps,
-            initial = rule,
-            onDismiss = { editingRule = null }
-        ) { action, app, regex, note ->
-            vm.updateSaveRule(rule.copy(action = action, appPackage = app, regexPattern = regex, note = note))
+        SaveRuleDialog(installedApps, rule, { editingRule = null }) { action, app, regex, flags, note, schedule, start, end, mins ->
+            val expires = if (schedule == ScheduleType.TIMER) System.currentTimeMillis() + mins * 60_000L else rule.timerExpiresAt
+            vm.updateSaveRule(rule.copy(action = action, appPackage = app, regexPattern = regex,
+                regexFlags = flags, note = note, scheduleType = schedule,
+                scheduleWindowStart = start, scheduleWindowEnd = end,
+                timerMinutes = mins, timerExpiresAt = expires))
             editingRule = null
         }
     }
@@ -113,82 +122,61 @@ fun SaveRulesScreen(vm: MainViewModel, installedApps: List<AppInfo>) {
 
 @Composable
 private fun SaveRuleRow(
-    rule: SaveRule,
-    index: Int,
-    isFirst: Boolean,
-    isLast: Boolean,
-    installedApps: List<AppInfo>,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onToggle: () -> Unit,
-    onDelete: () -> Unit,
-    onTap: () -> Unit
+    rule: SaveRule, index: Int, isFirst: Boolean, isLast: Boolean,
+    installedApps: List<AppInfo>, isDragging: Boolean, dragOffset: Float,
+    onMoveUp: () -> Unit, onMoveDown: () -> Unit, onToggle: () -> Unit,
+    onDelete: () -> Unit, onTap: () -> Unit,
+    onDragStart: () -> Unit, onDrag: (Float) -> Unit, onDragEnd: () -> Unit
 ) {
     val accent = if (rule.action == SaveRuleAction.SKIP) NgColors.Red else NgColors.Green
     val appName = installedApps.find { it.packageName == rule.appPackage }?.appName
 
     NgCard(
         borderColor = if (rule.enabled) accent.copy(alpha = 0.4f) else NgColors.Border,
-        onClick = onTap
+        modifier = Modifier
+            .graphicsLayer { if (isDragging) translationY = dragOffset }
+            .pointerInput(Unit) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { onDragStart() },
+                    onDrag = { _, offset -> onDrag(offset.y) },
+                    onDragEnd = { onDragEnd() },
+                    onDragCancel = { onDragEnd() }
+                )
+            }
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.size(24.dp).background(NgColors.Border, RoundedCornerShape(5.dp))
-            ) {
+        Row(modifier = Modifier.clickable(onClick = onTap),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(contentAlignment = Alignment.Center,
+                modifier = Modifier.size(24.dp).background(NgColors.Border, RoundedCornerShape(5.dp))) {
                 Text("${index + 1}", color = NgColors.TextMuted, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold)
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 IconButton(onClick = onMoveUp, enabled = !isFirst, modifier = Modifier.size(22.dp)) {
                     Icon(Icons.Default.KeyboardArrowUp, null,
-                        tint = if (!isFirst) NgColors.TextMuted else NgColors.TextFaint,
-                        modifier = Modifier.size(14.dp))
+                        tint = if (!isFirst) NgColors.TextMuted else NgColors.TextFaint, modifier = Modifier.size(14.dp))
                 }
                 IconButton(onClick = onMoveDown, enabled = !isLast, modifier = Modifier.size(22.dp)) {
                     Icon(Icons.Default.KeyboardArrowDown, null,
-                        tint = if (!isLast) NgColors.TextMuted else NgColors.TextFaint,
-                        modifier = Modifier.size(14.dp))
+                        tint = if (!isLast) NgColors.TextMuted else NgColors.TextFaint, modifier = Modifier.size(14.dp))
                 }
             }
             Column(modifier = Modifier.weight(1f)) {
                 NgTag(if (rule.action == SaveRuleAction.SKIP) "Skip" else "Save", accent)
                 Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("📱", fontSize = 11.sp)
-                    Text(
-                        if (rule.appPackage.isNotBlank()) appName ?: rule.appPackage else "Any app",
-                        color = if (rule.appPackage.isNotBlank()) NgColors.Text else NgColors.TextFaint,
-                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold
-                    )
+                Text(if (rule.appPackage.isNotBlank()) appName ?: rule.appPackage else "Any app",
+                    color = if (rule.appPackage.isNotBlank()) NgColors.Text else NgColors.TextFaint,
+                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                if (rule.regexPattern.isNotBlank()) {
+                    Text(rule.regexPattern, color = NgColors.TextMuted, fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace, maxLines = 1)
                 }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.padding(top = 2.dp)
-                ) {
-                    Text("🔤", fontSize = 11.sp)
-                    Text(
-                        if (rule.regexPattern.isNotBlank()) rule.regexPattern else "Any content",
-                        color = if (rule.regexPattern.isNotBlank()) NgColors.TextMuted else NgColors.TextFaint,
-                        fontSize = 11.sp,
-                        fontFamily = if (rule.regexPattern.isNotBlank()) FontFamily.Monospace else FontFamily.Default,
-                        maxLines = 1
-                    )
-                }
-                if (rule.note.isNotBlank()) {
-                    Text(rule.note, color = NgColors.TextMuted, fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp))
-                }
-                Text("Tap to edit", color = NgColors.TextFaint, fontSize = 9.sp, modifier = Modifier.padding(top = 3.dp))
+                if (rule.note.isNotBlank()) Text(rule.note, color = NgColors.TextMuted, fontSize = 10.sp)
+                Text("Tap to edit · Long press to drag", color = NgColors.TextFaint, fontSize = 9.sp, modifier = Modifier.padding(top = 2.dp))
             }
-            Switch(
-                checked = rule.enabled,
-                onCheckedChange = { onToggle() },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White, checkedTrackColor = NgColors.Green,
-                    uncheckedThumbColor = NgColors.TextFaint, uncheckedTrackColor = NgColors.Border
-                ),
-                modifier = Modifier.height(24.dp)
-            )
+            Switch(checked = rule.enabled, onCheckedChange = { onToggle() },
+                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = NgColors.Green,
+                    uncheckedThumbColor = NgColors.TextFaint, uncheckedTrackColor = NgColors.Border),
+                modifier = Modifier.height(24.dp))
             IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
                 Icon(Icons.Default.Delete, null, tint = NgColors.TextFaint, modifier = Modifier.size(15.dp))
             }
@@ -201,127 +189,73 @@ private fun SaveRuleDialog(
     installedApps: List<AppInfo>,
     initial: SaveRule?,
     onDismiss: () -> Unit,
-    onConfirm: (SaveRuleAction, String, String, String) -> Unit
+    onConfirm: (SaveRuleAction, String, String, String, String, ScheduleType, String, String, Int) -> Unit
 ) {
     val isEdit = initial != null
     var action by remember { mutableStateOf(initial?.action ?: SaveRuleAction.SKIP) }
     var selectedApp by remember { mutableStateOf(initial?.appPackage ?: "") }
     var regex by remember { mutableStateOf(initial?.regexPattern ?: "") }
+    var regexFlags by remember { mutableStateOf(initial?.regexFlags ?: "") }
     var note by remember { mutableStateOf(initial?.note ?: "") }
+    var scheduleType by remember { mutableStateOf(initial?.scheduleType ?: ScheduleType.ALWAYS) }
+    var windowStart by remember { mutableStateOf(initial?.scheduleWindowStart ?: "") }
+    var windowEnd by remember { mutableStateOf(initial?.scheduleWindowEnd ?: "") }
+    var timerMinutes by remember { mutableStateOf(initial?.timerMinutes?.takeIf { it > 0 } ?: 30) }
     var appSearch by remember { mutableStateOf("") }
-
-    val isValid = selectedApp.isNotBlank() || regex.isNotBlank()
     val filteredApps = remember(appSearch) {
-        installedApps.filter {
-            appSearch.isBlank() ||
-            it.appName.contains(appSearch, true) ||
-            it.packageName.contains(appSearch, true)
-        }
-    }
-    val regexError = remember(regex) {
-        if (regex.isBlank()) null
-        else runCatching { Regex(regex); null }.getOrElse { it.message }
+        installedApps.filter { appSearch.isBlank() || it.appName.contains(appSearch, true) || it.packageName.contains(appSearch, true) }
     }
 
     Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(NgColors.Surface, RoundedCornerShape(14.dp))
-                .border(1.dp, NgColors.Border, RoundedCornerShape(14.dp))
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    if (isEdit) "Edit Rule" else stringResource(R.string.add_rule),
-                    fontWeight = FontWeight.Bold, fontSize = 16.sp, color = NgColors.Text
-                )
+        Column(modifier = Modifier.fillMaxWidth()
+            .background(NgColors.Surface, RoundedCornerShape(14.dp))
+            .border(1.dp, NgColors.Border, RoundedCornerShape(14.dp))) {
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(if (isEdit) "Edit Save Rule" else "Add Save Rule",
+                    fontWeight = FontWeight.Bold, fontSize = 16.sp, color = NgColors.Text)
                 TextButton(onClick = onDismiss) { Text("✕", color = NgColors.TextMuted) }
             }
             HorizontalDivider(color = NgColors.Border)
-
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Action
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 RuleDialogLabel("Action")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(SaveRuleAction.SKIP to "🚫  Skip", SaveRuleAction.SAVE to "💾  Save").forEach { (a, lbl) ->
                         val sel = action == a
                         val c = if (a == SaveRuleAction.SKIP) NgColors.Red else NgColors.Green
-                        OutlinedButton(
-                            onClick = { action = a },
-                            modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = if (sel) c.copy(.15f) else Color.Transparent),
+                        OutlinedButton(onClick = { action = a }, modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(containerColor = if (sel) c.copy(.15f) else Color.Transparent),
                             border = BorderStroke(1.dp, if (sel) c else NgColors.Border),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
+                            contentPadding = PaddingValues(vertical = 8.dp)) {
                             Text(lbl, fontSize = 12.sp, color = if (sel) NgColors.Text else NgColors.TextMuted)
                         }
                     }
                 }
-
-                // App
                 RuleDialogLabel("App  (blank = any app)")
                 NgSearchBar(appSearch, { appSearch = it }, stringResource(R.string.search_apps))
                 Spacer(Modifier.height(2.dp))
                 AppPickerList(filteredApps, selectedApp) { selectedApp = it }
-
-                // Regex
-                RuleDialogLabel("Regex pattern  (blank = any content)")
-                OutlinedTextField(
-                    value = regex, onValueChange = { regex = it },
-                    placeholder = { Text("(?i)(promo|sale|限时)", color = NgColors.TextFaint, fontSize = 12.sp, fontFamily = FontFamily.Monospace) },
-                    singleLine = true,
-                    textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
-                    colors = ngTextFieldColors(), shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (regexError != null) {
-                    Text("⚠ $regexError", color = NgColors.Red, fontSize = 10.sp)
-                } else {
-                    Text("Applied to title + body. Supports Unicode (中文, etc.)",
-                        color = NgColors.TextFaint, fontSize = 10.sp)
-                }
-
-                // Note
+                RuleDialogLabel("Regex Pattern & Flags")
+                RegexInputWithFlags(regex, { regex = it }, regexFlags, { regexFlags = it })
                 RuleDialogLabel(stringResource(R.string.note_optional))
-                OutlinedTextField(
-                    value = note, onValueChange = { note = it },
+                OutlinedTextField(value = note, onValueChange = { note = it },
                     placeholder = { Text("Describe this rule…", color = NgColors.TextFaint, fontSize = 13.sp) },
                     singleLine = true, colors = ngTextFieldColors(),
-                    shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()
-                )
-
-                // Preview
-                if (isValid) {
-                    RuleSummary(
-                        actionLabel = if (action == SaveRuleAction.SKIP) "Skip saving" else "Force save",
-                        appLabel = if (selectedApp.isBlank()) "any app"
-                            else installedApps.find { it.packageName == selectedApp }?.appName ?: selectedApp,
-                        contentLabel = if (regex.isBlank()) "any content" else "\"$regex\""
-                    )
-                }
-
-                // Buttons
+                    shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth())
+                RuleDialogLabel("Schedule")
+                ScheduleEditor(scheduleType, { scheduleType = it }, windowStart, { windowStart = it },
+                    windowEnd, { windowEnd = it }, timerMinutes, { timerMinutes = it })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = onDismiss, modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, NgColors.Border)
-                    ) { Text(stringResource(R.string.cancel), color = NgColors.TextMuted) }
-                    Button(
-                        onClick = { if (isValid) onConfirm(action, selectedApp, regex, note) },
-                        enabled = isValid && regexError == null,
+                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, NgColors.Border)) {
+                        Text(stringResource(R.string.cancel), color = NgColors.TextMuted)
+                    }
+                    Button(onClick = { onConfirm(action, selectedApp, regex, regexFlags, note, scheduleType, windowStart, windowEnd, timerMinutes) },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(containerColor = NgColors.Accent),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
+                        shape = RoundedCornerShape(10.dp)) {
                         Text(if (isEdit) "Save" else stringResource(R.string.add_rule), fontWeight = FontWeight.Bold)
                     }
                 }

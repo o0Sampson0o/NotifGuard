@@ -4,7 +4,23 @@ import androidx.room.*
 import com.notifguard.data.model.*
 import kotlinx.coroutines.flow.Flow
 
-// ─── Filter Rule DAO ───────────────────────────────────────────────────────
+@Dao
+interface RuleGroupDao {
+    @Query("SELECT * FROM rule_groups ORDER BY name ASC")
+    fun getAll(): Flow<List<RuleGroup>>
+
+    @Query("SELECT * FROM rule_groups ORDER BY name ASC")
+    suspend fun getAllOnce(): List<RuleGroup>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(group: RuleGroup)
+
+    @Update
+    suspend fun update(group: RuleGroup)
+
+    @Query("DELETE FROM rule_groups WHERE id = :id")
+    suspend fun deleteById(id: String)
+}
 
 @Dao
 interface FilterRuleDao {
@@ -23,16 +39,29 @@ interface FilterRuleDao {
     @Query("DELETE FROM filter_rules WHERE id = :id")
     suspend fun deleteById(id: String)
 
+    @Query("DELETE FROM filter_rules WHERE groupId = :groupId")
+    suspend fun deleteByGroupId(groupId: String)
+
+    @Query("UPDATE filter_rules SET groupId = NULL WHERE groupId = :groupId")
+    suspend fun ungroupByGroupId(groupId: String)
+
     @Query("UPDATE filter_rules SET priority = :priority WHERE id = :id")
     suspend fun updatePriority(id: String, priority: Int)
+
+    @Query("UPDATE filter_rules SET enabled = :enabled WHERE groupId = :groupId")
+    suspend fun setEnabledForGroup(groupId: String, enabled: Boolean)
+
+    @Query("UPDATE filter_rules SET action = :action WHERE groupId = :groupId")
+    suspend fun setActionForGroup(groupId: String, action: RuleAction)
+
+    @Query("UPDATE filter_rules SET scheduleType = :type, scheduleWindowStart = :start, scheduleWindowEnd = :end, timerMinutes = :mins, timerExpiresAt = :expires WHERE groupId = :groupId")
+    suspend fun setScheduleForGroup(groupId: String, type: ScheduleType, start: String, end: String, mins: Int, expires: Long)
 
     @Transaction
     suspend fun reorderRules(rules: List<FilterRule>) {
         rules.forEachIndexed { index, rule -> updatePriority(rule.id, index) }
     }
 }
-
-// ─── Save Rule DAO ─────────────────────────────────────────────────────────
 
 @Dao
 interface SaveRuleDao {
@@ -51,6 +80,12 @@ interface SaveRuleDao {
     @Query("DELETE FROM save_rules WHERE id = :id")
     suspend fun deleteById(id: String)
 
+    @Query("DELETE FROM save_rules WHERE groupId = :groupId")
+    suspend fun deleteByGroupId(groupId: String)
+
+    @Query("UPDATE save_rules SET groupId = NULL WHERE groupId = :groupId")
+    suspend fun ungroupByGroupId(groupId: String)
+
     @Query("UPDATE save_rules SET priority = :priority WHERE id = :id")
     suspend fun updatePriority(id: String, priority: Int)
 
@@ -59,8 +94,6 @@ interface SaveRuleDao {
         rules.forEachIndexed { index, rule -> updatePriority(rule.id, index) }
     }
 }
-
-// ─── Saved Notification DAO ────────────────────────────────────────────────
 
 @Dao
 interface SavedNotificationDao {
@@ -88,21 +121,14 @@ interface SavedNotificationDao {
     @Query("DELETE FROM saved_notifications WHERE expiresAt < :now")
     suspend fun deleteExpired(now: Long = System.currentTimeMillis())
 
-    @Query("""SELECT * FROM saved_notifications
-              WHERE packageName = :pkg AND (title LIKE :q OR body LIKE :q)
-              ORDER BY latestAt DESC""")
+    @Query("SELECT * FROM saved_notifications WHERE packageName = :pkg AND (title LIKE :q OR body LIKE :q) ORDER BY latestAt DESC")
     fun search(pkg: String, q: String): Flow<List<SavedNotification>>
 }
-
-// ─── Notification History DAO ──────────────────────────────────────────────
 
 @Dao
 interface NotifHistoryDao {
     @Query("SELECT * FROM notif_history WHERE threadId = :threadId ORDER BY recordedAt DESC")
     fun getHistory(threadId: String): Flow<List<NotifHistory>>
-
-    @Query("SELECT * FROM notif_history WHERE threadId = :threadId ORDER BY recordedAt DESC")
-    suspend fun getHistoryOnce(threadId: String): List<NotifHistory>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entry: NotifHistory)
@@ -114,22 +140,13 @@ interface NotifHistoryDao {
     suspend fun deleteExpired(now: Long = System.currentTimeMillis())
 }
 
-// ─── Activity Log DAO ──────────────────────────────────────────────────────
-
 @Dao
 interface LogEntryDao {
     @Query("SELECT * FROM activity_log ORDER BY timestamp DESC LIMIT 300")
     fun getRecent(): Flow<List<LogEntry>>
 
-    // Find existing log entry by notifKey to detect if this is an update
-    @Query("SELECT * FROM activity_log WHERE notifKey = :key ORDER BY timestamp DESC LIMIT 1")
-    suspend fun findLatestByKey(key: String): LogEntry?
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entry: LogEntry)
-
-    @Update
-    suspend fun update(entry: LogEntry)
 
     @Query("DELETE FROM activity_log WHERE timestamp < :cutoff")
     suspend fun deleteOlderThan(cutoff: Long)
