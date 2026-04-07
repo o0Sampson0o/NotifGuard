@@ -1,6 +1,9 @@
 package com.notifguard.service
 
 import android.app.Notification
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.BitmapDrawable
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.media.AudioAttributes
@@ -117,6 +120,21 @@ class NotifListenerService : NotificationListenerService() {
     private fun repostSilently(sbn: StatusBarNotification, title: String, body: String) {
         runCatching {
             val pendingIntent = sbn.notification.contentIntent
+
+            // Use the original app's launcher icon as the large icon so it looks natural.
+            // We can't use another app's icon as the small icon (system restriction),
+            // but large icon in the notification drawer is what the user sees.
+            val appIconBitmap: Bitmap? = runCatching {
+                val drawable = packageManager.getApplicationIcon(sbn.packageName)
+                val size = resources.getDimensionPixelSize(android.R.dimen.notification_large_icon_width)
+                    .coerceAtLeast(96)
+                val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(bmp)
+                drawable.setBounds(0, 0, size, size)
+                drawable.draw(canvas)
+                bmp
+            }.getOrNull()
+
             val builder = NotificationCompat.Builder(this, silentChannelId)
                 .setContentTitle(title)
                 .setContentText(body)
@@ -124,6 +142,11 @@ class NotifListenerService : NotificationListenerService() {
                 .setContentIntent(pendingIntent)
                 .setAutoCancel(true)
                 .setSilent(true)
+
+            if (appIconBitmap != null) {
+                builder.setLargeIcon(appIconBitmap)
+            }
+
             nm.notify(sbn.id, builder.build())
         }
     }
